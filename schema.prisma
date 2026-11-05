@@ -1,0 +1,446 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ==================== AUTH & RBAC ====================
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String    @unique
+  emailVerified DateTime?
+  passwordHash  String?
+  image         String?
+  role          Role      @default(EVENT_MANAGER)
+  isActive      Boolean   @default(true)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  accounts      Account[]
+  sessions      Session[]
+  checkIns      CheckIn[]
+  auditLogs     AuditLog[]
+  assignedSpocs Spoc[]    @relation("SpocUser")
+
+  @@map("users")
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@map("accounts")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+  @@map("verification_tokens")
+}
+
+enum Role {
+  SUPER_ADMIN
+  EVENT_MANAGER
+  SPEAKER_MANAGER
+  SPONSOR_MANAGER
+  STALL_MANAGER
+  ARTIST_MANAGER
+  REGISTRATION_MANAGER
+  CHECKIN_STAFF
+  CUSTOM
+}
+
+// ==================== EVENT CONFIG ====================
+
+model Event {
+  id              String   @id @default(cuid())
+  name            String
+  tagline         String?
+  description     String?  @db.Text
+  category        String?
+  logoUrl         String?
+  bannerUrl       String?
+  faviconUrl      String?
+  theme           String?  @default("tech")
+  startDate       DateTime
+  endDate         DateTime
+  startTime       String?
+  endTime         String?
+  timezone        String   @default("Asia/Kolkata")
+  venueName       String?
+  venueAddress    String?  @db.Text
+  googleMapsUrl   String?
+  organizerName   String?
+  organizerEmail  String?
+  organizerPhone  String?
+  websiteUrl      String?
+  socialLinks     Json?
+  // Branding
+  primaryColor    String   @default("#00D4FF")
+  secondaryColor  String   @default("#A855F7")
+  backgroundColor String   @default("#08080F")
+  textColor       String   @default("#E8E8F0")
+  fontHeading     String   @default("Orbitron")
+  fontBody        String   @default("Inter")
+  // Registration mode
+  registrationMode RegistrationMode @default(OPEN)
+  isPublished     Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  pages           EventPage[]
+  ticketTypes     TicketType[]
+  registrations   Registration[]
+  speakers        Speaker[]
+  sponsors        Sponsor[]
+  spocs           Spoc[]
+  invitations     Invitation[]
+  emailTemplates  EmailTemplate[]
+  reminders       Reminder[]
+  formFields      FormField[]
+
+  @@map("events")
+}
+
+enum RegistrationMode {
+  OPEN
+  RSVP
+  INVITATION_ONLY
+}
+
+model EventPage {
+  id          String   @id @default(cuid())
+  eventId     String
+  slug        String
+  title       String
+  content     Json?    // flexible content blocks
+  isEnabled   Boolean  @default(true)
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, slug])
+  @@map("event_pages")
+}
+
+// ==================== TICKETS & REGISTRATION ====================
+
+model TicketType {
+  id          String   @id @default(cuid())
+  eventId     String
+  name        String
+  description String?  @db.Text
+  price       Decimal  @default(0) @db.Decimal(10, 2)
+  capacity    Int?
+  isActive    Boolean  @default(true)
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  event         Event          @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  registrations Registration[]
+  spocAssignments SpocAssignment[]
+  formFields    FormField[]
+
+  @@map("ticket_types")
+}
+
+model FormField {
+  id           String   @id @default(cuid())
+  eventId      String
+  ticketTypeId String?
+  label        String
+  fieldKey     String
+  fieldType    String   // text, email, phone, select, radio, checkbox, textarea, file
+  options      Json?    // for select/radio/checkbox
+  isRequired   Boolean  @default(false)
+  sortOrder    Int      @default(0)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  event      Event       @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  ticketType TicketType? @relation(fields: [ticketTypeId], references: [id], onDelete: SetNull)
+
+  @@map("form_fields")
+}
+
+model Registration {
+  id              String             @id @default(cuid())
+  eventId         String
+  ticketTypeId    String
+  registrationId  String             @unique // human readable e.g. LL-2026-0001
+  fullName        String
+  email           String
+  phone           String?
+  organization    String?
+  designation     String?
+  city            String?
+  country         String?
+  answers         Json?              // dynamic form answers
+  status          RegistrationStatus @default(CONFIRMED)
+  invitationCode  String?
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+
+  event      Event      @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  ticketType TicketType @relation(fields: [ticketTypeId], references: [id])
+  ticket     Ticket?
+  checkIns   CheckIn[]
+
+  @@unique([eventId, email])
+  @@index([registrationId])
+  @@map("registrations")
+}
+
+enum RegistrationStatus {
+  PENDING
+  CONFIRMED
+  CANCELLED
+  WAITLIST
+}
+
+model Ticket {
+  id              String   @id @default(cuid())
+  registrationId  String   @unique
+  ticketNumber    String   @unique
+  qrToken         String   @unique // secure opaque token
+  qrCodeDataUrl   String?  @db.Text
+  status          TicketStatus @default(VALID)
+  issuedAt        DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  registration Registration @relation(fields: [registrationId], references: [id], onDelete: Cascade)
+  checkIns     CheckIn[]
+  verifications TicketVerification[]
+
+  @@map("tickets")
+}
+
+enum TicketStatus {
+  VALID
+  USED
+  CANCELLED
+  EXPIRED
+}
+
+model TicketVerification {
+  id        String   @id @default(cuid())
+  ticketId  String
+  status    String
+  scannedAt DateTime @default(now())
+  scannedBy String?
+  notes     String?
+
+  ticket Ticket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+
+  @@map("ticket_verifications")
+}
+
+model CheckIn {
+  id             String   @id @default(cuid())
+  ticketId       String
+  registrationId String
+  checkedInAt    DateTime @default(now())
+  checkedInById  String?
+  notes          String?
+
+  ticket       Ticket       @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  registration Registration @relation(fields: [registrationId], references: [id], onDelete: Cascade)
+  checkedInBy  User?        @relation(fields: [checkedInById], references: [id])
+
+  @@map("check_ins")
+}
+
+// ==================== INVITATIONS ====================
+
+model Invitation {
+  id          String    @id @default(cuid())
+  eventId     String
+  code        String    @unique
+  email       String?
+  fullName    String?
+  expiresAt   DateTime?
+  maxUses     Int       @default(1)
+  usedCount   Int       @default(0)
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@map("invitations")
+}
+
+// ==================== CONTENT ENTITIES ====================
+
+model Speaker {
+  id          String   @id @default(cuid())
+  eventId     String
+  name        String
+  title       String?
+  bio         String?  @db.Text
+  photoUrl    String?
+  company     String?
+  socialLinks Json?
+  sortOrder   Int      @default(0)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@map("speakers")
+}
+
+model Sponsor {
+  id          String   @id @default(cuid())
+  eventId     String
+  name        String
+  logoUrl     String?
+  websiteUrl  String?
+  tier        String?  // title, gold, silver, etc.
+  description String?  @db.Text
+  sortOrder   Int      @default(0)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@map("sponsors")
+}
+
+// ==================== SPOC ====================
+
+model Spoc {
+  id           String   @id @default(cuid())
+  eventId      String
+  userId       String?
+  name         String
+  designation  String?
+  department   String?
+  email        String
+  phone        String?
+  whatsapp     String?
+  photoUrl     String?
+  responsibility String?
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  event       Event            @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user        User?            @relation("SpocUser", fields: [userId], references: [id])
+  assignments SpocAssignment[]
+
+  @@map("spocs")
+}
+
+model SpocAssignment {
+  id           String @id @default(cuid())
+  spocId       String
+  ticketTypeId String
+
+  spoc       Spoc       @relation(fields: [spocId], references: [id], onDelete: Cascade)
+  ticketType TicketType @relation(fields: [ticketTypeId], references: [id], onDelete: Cascade)
+
+  @@unique([spocId, ticketTypeId])
+  @@map("spoc_assignments")
+}
+
+// ==================== EMAIL & REMINDERS ====================
+
+model EmailTemplate {
+  id        String   @id @default(cuid())
+  eventId   String
+  name      String
+  subject   String
+  bodyHtml  String   @db.Text
+  bodyText  String?  @db.Text
+  type      String   // confirmation, reminder, campaign, etc.
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@map("email_templates")
+}
+
+model Reminder {
+  id            String         @id @default(cuid())
+  eventId       String
+  name          String
+  subject       String
+  bodyHtml      String         @db.Text
+  scheduledAt   DateTime
+  timezone      String         @default("Asia/Kolkata")
+  status        ReminderStatus @default(SCHEDULED)
+  sentAt        DateTime?
+  recipientType String         // all, ticket_type, custom
+  ticketTypeId  String?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@map("reminders")
+}
+
+enum ReminderStatus {
+  SCHEDULED
+  PROCESSING
+  SENT
+  FAILED
+  CANCELLED
+}
+
+// ==================== AUDIT ====================
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  action    String
+  entity    String?
+  entityId  String?
+  details   Json?
+  ipAddress String?
+  createdAt DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@map("audit_logs")
+}
